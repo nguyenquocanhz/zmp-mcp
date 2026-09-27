@@ -2,7 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-import { getLoginStatus, requestLoginQr, setProjectToken } from './tools/auth.js';
+import {
+  getLoginStatus,
+  requestLoginQr,
+  pollLoginStatus,
+  startOAuthCallback,
+  setProjectToken,
+} from './tools/auth.js';
 import { getAppInfo, createAppProject } from './tools/project.js';
 import { buildProject, syncConfig } from './tools/build.js';
 import { validateProject } from './tools/validate.js';
@@ -33,17 +39,57 @@ server.tool(
 // 2. zmp_request_login_qr
 server.tool(
   'zmp_request_login_qr',
-  'Request a new developer login session and generate a QR code for Zalo authorization.',
-  {},
-  async () => {
-    const res = await requestLoginQr();
+  'Request a new developer login session and generate a QR code for Zalo authorization. Can optionally wait/poll until scanned.',
+  {
+    projectDir: z.string().optional().describe('Optional path to project directory to auto-save ZMP_TOKEN upon scan.'),
+    appId: z.string().optional().describe('Optional Zalo Mini App ID.'),
+    waitForScan: z.boolean().optional().describe('Whether to block and poll until user scans QR on mobile (default: false).'),
+    timeoutSec: z.number().optional().describe('Timeout in seconds for scanning (default: 60).'),
+  },
+  async ({ projectDir, appId, waitForScan, timeoutSec }) => {
+    const res = await requestLoginQr({ projectDir, appId, waitForScan, timeoutSec });
     return {
       content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
     };
   }
 );
 
-// 3. zmp_set_token
+// 3. zmp_wait_for_login
+server.tool(
+  'zmp_wait_for_login',
+  'Poll and wait for user to confirm mobile Zalo QR scan authorization, then automatically save ZMP_TOKEN into .env.',
+  {
+    zmpsk: z.string().describe('Session key (zmpsk) returned by zmp_request_login_qr.'),
+    projectDir: z.string().describe('Project directory where .env should be updated with the token.'),
+    timeoutSec: z.number().optional().describe('Polling timeout in seconds (default: 60).'),
+  },
+  async ({ zmpsk, projectDir, timeoutSec }) => {
+    const res = await pollLoginStatus({ zmpsk, projectDir, timeoutSec });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 4. zmp_start_oauth_callback
+server.tool(
+  'zmp_start_oauth_callback',
+  'Start a local HTTP OAuth callback server (e.g. http://localhost:8085/oauth/callback) to capture redirect code/token.',
+  {
+    port: z.number().optional().describe('Local port to listen on (default: 8085).'),
+    timeoutSec: z.number().optional().describe('Timeout waiting for redirect callback (default: 120s).'),
+    projectDir: z.string().optional().describe('Optional project directory to save received token/code.'),
+    zaloAppId: z.string().optional().describe('Optional Zalo App ID to construct authorization URL.'),
+  },
+  async ({ port, timeoutSec, projectDir, zaloAppId }) => {
+    const res = await startOAuthCallback({ port, timeoutSec, projectDir, zaloAppId });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 5. zmp_set_token
 server.tool(
   'zmp_set_token',
   'Save or update APP_ID and ZMP_TOKEN in the project local .env file.',

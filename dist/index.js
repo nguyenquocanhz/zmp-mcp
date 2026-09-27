@@ -155,6 +155,145 @@ function saveEnv(projectDir, values) {
   fs.writeFileSync(envPath, newLines.join("\n"), "utf8");
 }
 
+// src/utils/oauth-server.ts
+import http from "http";
+import { URL } from "url";
+function startLocalOAuthServer(options) {
+  const port = options.port || 8085;
+  const timeoutMs = options.timeoutMs || 12e4;
+  return new Promise((resolveStart, rejectStart) => {
+    let server2;
+    const callbackPromise = new Promise((resolveCallback, rejectCallback) => {
+      let timeoutHandle;
+      server2 = http.createServer((req, res) => {
+        try {
+          const reqUrl = new URL(req.url || "/", `http://localhost:${port}`);
+          if (reqUrl.pathname === "/oauth/callback" || reqUrl.pathname === "/callback") {
+            const params = {};
+            reqUrl.searchParams.forEach((val, key) => {
+              params[key] = val;
+            });
+            const code = params["code"] || params["authorization_code"];
+            const state = params["state"];
+            const error = params["error"];
+            const errorDescription = params["error_description"];
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(`
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zalo Mini App - X\xE1c Th\u1EF1c Th\xE0nh C\xF4ng</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: #f4f6f8;
+      color: #1a1a1a;
+    }
+    .card {
+      background: #ffffff;
+      padding: 40px;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+      text-align: center;
+      max-width: 440px;
+      width: 90%;
+    }
+    .icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: #e8f3ff;
+      color: #0068FF;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 10px 0;
+      color: #0068FF;
+    }
+    p {
+      color: #5e6c84;
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 0 0 24px 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 8px 16px;
+      background: #f0f2f5;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">\u2713</div>
+    <h1>X\xE1c th\u1EF1c Zalo th\xE0nh c\xF4ng!</h1>
+    <p>Th\xF4ng tin x\xE1c th\u1EF1c \u0111\xE3 \u0111\u01B0\u1EE3c chuy\u1EC3n t\u1EF1 \u0111\u1ED9ng v\u1EC1 AI Assistant (Claude, Codex, Antigravity). B\u1EA1n c\xF3 th\u1EC3 \u0111\xF3ng c\u1EEDa s\u1ED5 n\xE0y.</p>
+    <div class="badge">Session ID: ${state || "OK"}</div>
+  </div>
+</body>
+</html>
+            `);
+            clearTimeout(timeoutHandle);
+            setTimeout(() => {
+              server2.close();
+            }, 1e3);
+            resolveCallback({
+              code,
+              state,
+              error,
+              errorDescription,
+              rawParams: params
+            });
+          } else {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not Found");
+          }
+        } catch (e) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("Internal Server Error: " + e.message);
+          rejectCallback(e);
+        }
+      });
+      timeoutHandle = setTimeout(() => {
+        server2.close();
+        rejectCallback(new Error(`OAuth callback timed out after ${timeoutMs / 1e3}s`));
+      }, timeoutMs);
+      server2.on("error", (err) => {
+        clearTimeout(timeoutHandle);
+        rejectStart(err);
+      });
+      server2.listen(port, () => {
+        const callbackUrl = `http://localhost:${port}/oauth/callback`;
+        resolveStart({
+          port,
+          callbackUrl,
+          waitForCallback: () => callbackPromise,
+          close: () => {
+            clearTimeout(timeoutHandle);
+            server2.close();
+          }
+        });
+      });
+    });
+  });
+}
+
 // src/tools/auth.ts
 async function getLoginStatus(projectDir, explicitToken) {
   const env = loadEnv(projectDir);
@@ -189,23 +328,67 @@ async function getLoginStatus(projectDir, explicitToken) {
     };
   }
 }
-async function requestLoginQr() {
+async function pollLoginStatus(params) {
+  const { zmpsk, projectDir, timeoutSec = 60 } = params;
+  const client = createZaloApiClient();
+  const startTime = Date.now();
+  const maxTime = timeoutSec * 1e3;
+  while (Date.now() - startTime < maxTime) {
+    try {
+      const res = await client.get(
+        `${ZALO_CONFIG.ENDPOINTS.checkLoginStatus}?zmpsk=${encodeURIComponent(zmpsk)}`
+      );
+      if (res.data && res.data.err >= 0 && res.data.data?.jwt) {
+        const token = res.data.data.jwt;
+        if (projectDir) {
+          saveEnv(projectDir, { token });
+        }
+        return {
+          success: true,
+          message: "Zalo mobile scan verified! Access token saved to .env.",
+          token,
+          data: res.data.data
+        };
+      }
+    } catch {
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2e3));
+  }
+  return {
+    success: false,
+    error: `Login verification timed out after ${timeoutSec} seconds. Please scan and authorize again.`
+  };
+}
+async function requestLoginQr(params = {}) {
+  const { projectDir, appId: explicitAppId, waitForScan = false, timeoutSec = 60 } = params;
+  const env = projectDir ? loadEnv(projectDir) : {};
+  const appId = explicitAppId || env.appId || "";
   const client = createZaloApiClient();
   try {
-    const res = await client.get(ZALO_CONFIG.ENDPOINTS.requestLogin);
+    const url = appId ? `${ZALO_CONFIG.ENDPOINTS.requestLogin}?appId=${encodeURIComponent(appId)}` : ZALO_CONFIG.ENDPOINTS.requestLogin;
+    const res = await client.get(url);
     if (res.data && res.data.err === 0) {
-      const code = res.data.data.code;
-      const verifyUrl = `https://developers.zalo.me/tools/cli-login?code=${code}`;
+      const data = res.data.data;
+      const verifyUrl = data.loginUrl || `https://developers.zalo.me/tools/cli-login?code=${data.code}`;
+      const zmpsk = data.zmpsk || data.code;
       const dataUrl = await QRCode.toDataURL(verifyUrl, { margin: 2, scale: 6 });
       const terminalQr = await QRCode.toString(verifyUrl, { type: "terminal", small: true });
-      return {
+      const initialResult = {
         success: true,
-        code,
+        zmpsk,
         verifyUrl,
         terminalQr,
         qrDataUrl: dataUrl,
-        instructions: "Open your Zalo mobile app, scan this QR code or navigate to verifyUrl to authorize CLI access."
+        instructions: "Scan this QR code with your mobile Zalo app to authorize CLI developer access."
       };
+      if (waitForScan && zmpsk) {
+        const pollResult = await pollLoginStatus({ zmpsk, projectDir, timeoutSec });
+        return {
+          ...initialResult,
+          scanResult: pollResult
+        };
+      }
+      return initialResult;
     } else {
       return {
         success: false,
@@ -216,6 +399,37 @@ async function requestLoginQr() {
     return {
       success: false,
       error: err.response?.data?.msg || err.message
+    };
+  }
+}
+async function startOAuthCallback(params) {
+  const { port = 8085, timeoutSec = 120, projectDir, zaloAppId } = params;
+  const timeoutMs = timeoutSec * 1e3;
+  try {
+    const serverInstance = await startLocalOAuthServer({ port, timeoutMs });
+    let authUrl = "";
+    if (zaloAppId) {
+      const state = Math.random().toString(36).substring(7);
+      authUrl = `https://oauth.zaloapp.com/v4/permission?app_id=${zaloAppId}&redirect_uri=${encodeURIComponent(serverInstance.callbackUrl)}&state=${state}`;
+    }
+    const callbackData = await serverInstance.waitForCallback();
+    if (callbackData.code && projectDir) {
+      saveEnv(projectDir, { token: callbackData.code });
+    }
+    return {
+      success: !callbackData.error,
+      authUrl,
+      callbackUrl: serverInstance.callbackUrl,
+      code: callbackData.code,
+      state: callbackData.state,
+      error: callbackData.error,
+      errorDescription: callbackData.errorDescription,
+      message: callbackData.error ? `OAuth failed: ${callbackData.errorDescription || callbackData.error}` : "OAuth callback received successfully!"
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
     };
   }
 }
@@ -856,10 +1070,46 @@ server.tool(
 );
 server.tool(
   "zmp_request_login_qr",
-  "Request a new developer login session and generate a QR code for Zalo authorization.",
-  {},
-  async () => {
-    const res = await requestLoginQr();
+  "Request a new developer login session and generate a QR code for Zalo authorization. Can optionally wait/poll until scanned.",
+  {
+    projectDir: z.string().optional().describe("Optional path to project directory to auto-save ZMP_TOKEN upon scan."),
+    appId: z.string().optional().describe("Optional Zalo Mini App ID."),
+    waitForScan: z.boolean().optional().describe("Whether to block and poll until user scans QR on mobile (default: false)."),
+    timeoutSec: z.number().optional().describe("Timeout in seconds for scanning (default: 60).")
+  },
+  async ({ projectDir, appId, waitForScan, timeoutSec }) => {
+    const res = await requestLoginQr({ projectDir, appId, waitForScan, timeoutSec });
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_wait_for_login",
+  "Poll and wait for user to confirm mobile Zalo QR scan authorization, then automatically save ZMP_TOKEN into .env.",
+  {
+    zmpsk: z.string().describe("Session key (zmpsk) returned by zmp_request_login_qr."),
+    projectDir: z.string().describe("Project directory where .env should be updated with the token."),
+    timeoutSec: z.number().optional().describe("Polling timeout in seconds (default: 60).")
+  },
+  async ({ zmpsk, projectDir, timeoutSec }) => {
+    const res = await pollLoginStatus({ zmpsk, projectDir, timeoutSec });
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_start_oauth_callback",
+  "Start a local HTTP OAuth callback server (e.g. http://localhost:8085/oauth/callback) to capture redirect code/token.",
+  {
+    port: z.number().optional().describe("Local port to listen on (default: 8085)."),
+    timeoutSec: z.number().optional().describe("Timeout waiting for redirect callback (default: 120s)."),
+    projectDir: z.string().optional().describe("Optional project directory to save received token/code."),
+    zaloAppId: z.string().optional().describe("Optional Zalo App ID to construct authorization URL.")
+  },
+  async ({ port, timeoutSec, projectDir, zaloAppId }) => {
+    const res = await startOAuthCallback({ port, timeoutSec, projectDir, zaloAppId });
     return {
       content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
     };

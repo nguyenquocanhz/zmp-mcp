@@ -26,7 +26,9 @@ It bridges AI Coding Assistants (**Antigravity**, **Claude Desktop**, **Cursor**
 | Tool Name | Description |
 | :--- | :--- |
 | `zmp_get_login_status` | Check authentication status and developer identity with Zalo Platform. |
-| `zmp_request_login_qr` | Request a login session and generate an ASCII QR code & verification link for Zalo mobile authorization. |
+| `zmp_request_login_qr` | Request login session, generate QR code & link; optionally wait/poll until user scans. |
+| `zmp_wait_for_login` | Poll for mobile Zalo QR confirmation and automatically persist `ZMP_TOKEN` into `.env`. |
+| `zmp_start_oauth_callback` | Launch local HTTP OAuth server (e.g. `http://localhost:8085/oauth/callback`) to catch redirect codes with HTML feedback. |
 | `zmp_set_token` | Safely write or update `APP_ID` and `ZMP_TOKEN` in the project `.env`. |
 | `zmp_get_app_info` | Query Mini App metadata, quotas, and versions from Zalo API. |
 | `zmp_create_app` | Scaffold a clean Zalo Mini App project template with Vite, React 18, and ZAUi. |
@@ -37,81 +39,72 @@ It bridges AI Coding Assistants (**Antigravity**, **Claude Desktop**, **Cursor**
 
 ---
 
-## 🚀 Quickstart & Setup
+## 🚀 Quickstart & Setup (Zero Configuration via npx)
 
-### 1. Installation
-
-Clone and install dependencies:
+No need to clone or hardcode local paths. You can execute `zmp-mcp` directly via **npx**:
 
 ```bash
-git clone https://github.com/nguyenquocanhz/zmp-mcp.git
-cd zmp-mcp
-npm install
-npm run build
+npx -y github:nguyenquocanhz/zmp-mcp
 ```
 
 ---
 
-### 2. Configuration for AI Clients
+### Configuration for AI Clients
 
-#### Claude Code CLI & Claude Desktop
+#### 1. Claude Code CLI & Claude Desktop
 
-Run via CLI command:
+**Via Claude Code CLI:**
 ```bash
-/mcp add zmp-mcp node "D:/zmp-mcp/dist/index.js"
-# or
-claude mcp add zmp-mcp node "D:/zmp-mcp/dist/index.js"
+/mcp add zmp-mcp npx -y github:nguyenquocanhz/zmp-mcp
 ```
 
-Or add to your `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
+**Via `claude_desktop_config.json`:**
 ```json
 {
   "mcpServers": {
     "zmp-mcp": {
-      "command": "node",
-      "args": ["D:/zmp-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "github:nguyenquocanhz/zmp-mcp"]
     }
   }
 }
 ```
 
-#### OpenAI Codex CLI & Desktop
+#### 2. OpenAI Codex CLI & Desktop
 
-Run via Codex CLI:
+**Via Codex CLI:**
 ```bash
-codex mcp add zmp-mcp -- node "D:/zmp-mcp/dist/index.js"
+codex mcp add zmp-mcp -- npx -y github:nguyenquocanhz/zmp-mcp
 ```
 
-Or add directly to `~/.codex/config.toml`:
-
+**Via `~/.codex/config.toml`:**
 ```toml
 [mcp_servers."zmp-mcp"]
-command = "node"
-args = [ "D:/zmp-mcp/dist/index.js" ]
+command = "npx"
+args = [ "-y", "github:nguyenquocanhz/zmp-mcp" ]
 ```
 
-#### Antigravity / Gemini CLI
+#### 3. Antigravity / Gemini CLI
 
-Add to your `~/.gemini/config/mcp_config.json`:
+Add to `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
   "mcpServers": {
     "zmp-mcp": {
-      "command": "node",
-      "args": ["D:/zmp-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "github:nguyenquocanhz/zmp-mcp"]
     }
   }
 }
 ```
 
-#### Cursor / Windsurf
+#### 4. Cursor / Windsurf
 
 In Cursor settings under **Features > MCP Servers**:
 - **Name**: `zmp-mcp`
 - **Type**: `command`
-- **Command**: `node D:/zmp-mcp/dist/index.js`
+- **Command**: `npx -y github:nguyenquocanhz/zmp-mcp`
 
 ---
 
