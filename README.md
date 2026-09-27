@@ -36,6 +36,9 @@ It bridges AI Coding Assistants (**Antigravity**, **Claude Desktop**, **Cursor**
 | `zmp_sync_config` | Synchronize CSS/JS bundles from build output (`www/assets`) into `app-config.json` and `app.json`. |
 | `zmp_validate_project` | Run pre-flight linting on `app-config.json`, file size quotas, and asset extensions. |
 | `zmp_deploy` | Upload bundle to Zalo Cloud with chunked Resumable protocol, testing quota tracking, and instant preview links. |
+| `zmp_verify_webhook` | Verify or generate Zalo Webhook signatures (`x-zevent-signature`, SHA-256 sorted fields, Decree 13 user deletion). |
+| `zmp_manage_webhook_listener` | Start or manage a local webhook listener server with auto-signature checking for tunnels (ngrok/cloudflare). |
+| `zmp_get_webhook_docs` | Get comprehensive technical documentation, event schemas, and integration guide for Zalo Mini App Webhook. |
 
 ---
 
@@ -124,6 +127,11 @@ The agent executes `zmp_build`, producing the bundle and automatically mapping `
 > *"Deploy this mini app as a Testing version with description 'Release v1.0.0'."*
 
 The agent executes `zmp_deploy`, packaging `www/`, uploading chunks to `https://zmp-api.developers.zalo.me/app/upload-chunk`, and returning the test URL (`https://zalo.me/s/...`) with quota report.
+
+### 4. Webhook Verification & Local Testing (Decree 13 Compliance)
+> *"Start a webhook listener to test Zalo user data deletion events and verify signatures."*
+
+The agent executes `zmp_manage_webhook_listener` (with action: `start`, port: `8086`), giving you a ready-to-test endpoint for tunneling (`ngrok http 8086`) and verifying signatures with `zmp_verify_webhook`.
 
 ---
 

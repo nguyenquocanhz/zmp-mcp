@@ -1049,6 +1049,333 @@ async function deployApp(params) {
   };
 }
 
+// src/tools/webhook.ts
+import http2 from "http";
+
+// src/utils/signature.ts
+import crypto from "crypto";
+function buildMiniAppConcatenatedContent(data, apiKey) {
+  const sortedKeys = Object.keys(data).filter((k) => k !== "signature" && k !== "mac" && k !== "x-zevent-signature").sort();
+  let concatenated = "";
+  for (const key of sortedKeys) {
+    const val = data[key];
+    if (val !== void 0 && val !== null) {
+      if (typeof val === "object") {
+        concatenated += JSON.stringify(val);
+      } else {
+        concatenated += String(val);
+      }
+    }
+  }
+  concatenated += apiKey;
+  return { content: concatenated, sortedKeys };
+}
+function generateMiniAppWebhookSignature(data, apiKey) {
+  const { content } = buildMiniAppConcatenatedContent(data, apiKey);
+  return crypto.createHash("sha256").update(content, "utf8").digest("hex");
+}
+function verifyMiniAppWebhookSignature(data, apiKey, receivedSignature) {
+  const { content, sortedKeys } = buildMiniAppConcatenatedContent(data, apiKey);
+  const expectedSignature = crypto.createHash("sha256").update(content, "utf8").digest("hex");
+  const cleanReceived = (receivedSignature || "").trim().toLowerCase();
+  const isValid = cleanReceived === expectedSignature.toLowerCase();
+  return {
+    isValid,
+    expectedSignature,
+    calculatedContent: content,
+    sortedKeys
+  };
+}
+function generateOAWebhookSignature(params) {
+  const dataStr = typeof params.data === "string" ? params.data : JSON.stringify(params.data);
+  const raw = `${params.appId}${dataStr}${params.timestamp}${params.oaSecretKey}`;
+  return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
+}
+function verifyOAWebhookSignature(params) {
+  const expectedSignature = generateOAWebhookSignature(params);
+  const cleanReceived = (params.receivedSignature || "").trim().toLowerCase();
+  const isValid = cleanReceived === expectedSignature.toLowerCase();
+  return {
+    isValid,
+    expectedSignature
+  };
+}
+
+// src/tools/webhook.ts
+var activeListener = null;
+async function verifyWebhookTool(params) {
+  const type = params.type || (params.oaSecretKey ? "oa" : "miniapp");
+  if (type === "miniapp") {
+    const apiKey = params.apiKey;
+    if (!apiKey) {
+      return {
+        success: false,
+        error: "Missing required apiKey for Zalo Mini App Open API signature."
+      };
+    }
+    if (params.receivedSignature) {
+      const result = verifyMiniAppWebhookSignature(params.payload, apiKey, params.receivedSignature);
+      return {
+        success: true,
+        type: "miniapp",
+        isValid: result.isValid,
+        expectedSignature: result.expectedSignature,
+        receivedSignature: params.receivedSignature,
+        sortedKeys: result.sortedKeys,
+        calculatedContent: result.calculatedContent,
+        message: result.isValid ? "Signature is VALID. The webhook request comes genuinely from Zalo Platform." : "Signature MISMATCH. Check if payload fields or API Key are correct."
+      };
+    } else {
+      const signature = generateMiniAppWebhookSignature(params.payload, apiKey);
+      return {
+        success: true,
+        type: "miniapp",
+        generatedSignature: signature,
+        algorithm: "sha256(sorted_fields_values + apiKey)",
+        note: "Pass this in x-zevent-signature header when testing your webhook endpoint."
+      };
+    }
+  } else {
+    const oaSecretKey = params.oaSecretKey;
+    const appId = params.appId || String(params.payload.appId || "");
+    const timestamp = params.timestamp || params.payload.timestamp || Date.now();
+    if (!oaSecretKey || !appId) {
+      return {
+        success: false,
+        error: "Missing oaSecretKey or appId for Zalo OA Webhook verification."
+      };
+    }
+    if (params.receivedSignature) {
+      const result = verifyOAWebhookSignature({
+        appId,
+        data: params.payload,
+        timestamp,
+        oaSecretKey,
+        receivedSignature: params.receivedSignature
+      });
+      return {
+        success: true,
+        type: "oa",
+        isValid: result.isValid,
+        expectedSignature: result.expectedSignature,
+        receivedSignature: params.receivedSignature
+      };
+    } else {
+      const signature = generateOAWebhookSignature({
+        appId,
+        data: params.payload,
+        timestamp,
+        oaSecretKey
+      });
+      return {
+        success: true,
+        type: "oa",
+        generatedSignature: signature,
+        algorithm: "sha256(appId + data + timeStamp + OAsecretKey)"
+      };
+    }
+  }
+}
+async function manageWebhookListener(params) {
+  if (params.action === "stop") {
+    if (!activeListener) {
+      return { success: true, message: "No active webhook listener server running." };
+    }
+    await new Promise((resolve) => activeListener.server.close(() => resolve()));
+    const port2 = activeListener.port;
+    activeListener = null;
+    return { success: true, message: `Webhook listener on port ${port2} has been stopped.` };
+  }
+  if (params.action === "status") {
+    if (!activeListener) {
+      return {
+        running: false,
+        message: 'No webhook listener currently running. Use action: "start" to launch one.'
+      };
+    }
+    return {
+      running: true,
+      port: activeListener.port,
+      apiKeyConfigured: Boolean(activeListener.apiKey),
+      totalEventsReceived: activeListener.logs.length,
+      recentEvents: activeListener.logs.slice(-10),
+      tunnelTip: `Expose port ${activeListener.port} to the internet using: ngrok http ${activeListener.port} or cloudflared tunnel.`
+    };
+  }
+  if (params.action === "clear_logs") {
+    if (activeListener) {
+      activeListener.logs = [];
+    }
+    return { success: true, message: "Webhook logs cleared." };
+  }
+  if (activeListener) {
+    return {
+      running: true,
+      port: activeListener.port,
+      message: `Webhook listener is already running on port ${activeListener.port}. Use action "stop" first if you wish to change port.`,
+      tunnelTip: `Expose port ${activeListener.port} to the internet using: ngrok http ${activeListener.port}`
+    };
+  }
+  const port = params.port || 8086;
+  const apiKey = params.apiKey;
+  const logs = [];
+  const server2 = http2.createServer((req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-zevent-signature, authorization");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          service: "zmp-mcp Webhook Listener",
+          status: "ready",
+          eventsReceived: logs.length,
+          recentEvents: logs.slice(-5)
+        })
+      );
+      return;
+    }
+    if (req.method === "POST") {
+      let rawBody = "";
+      req.on("data", (chunk) => {
+        rawBody += chunk;
+      });
+      req.on("end", () => {
+        let parsedBody = null;
+        try {
+          parsedBody = JSON.parse(rawBody);
+        } catch {
+          parsedBody = rawBody;
+        }
+        const signatureHeader = req.headers["x-zevent-signature"] || req.headers["x-event-signature"] || req.headers["signature"];
+        let verification = { checked: false };
+        if (apiKey && parsedBody && typeof parsedBody === "object") {
+          if (signatureHeader) {
+            const vRes = verifyMiniAppWebhookSignature(parsedBody, apiKey, signatureHeader);
+            verification = {
+              checked: true,
+              isValid: vRes.isValid,
+              expectedSignature: vRes.expectedSignature
+            };
+          } else {
+            verification = {
+              checked: true,
+              isValid: false,
+              expectedSignature: generateMiniAppWebhookSignature(parsedBody, apiKey)
+            };
+          }
+        }
+        const entry = {
+          id: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          receivedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          method: req.method || "POST",
+          url: req.url || "/",
+          headers: req.headers,
+          signatureHeader,
+          body: parsedBody,
+          verification
+        };
+        logs.push(entry);
+        if (logs.length > 50) logs.shift();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: 0,
+            message: "Success",
+            receivedEvent: parsedBody?.event || "unknown"
+          })
+        );
+      });
+      return;
+    }
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: 405, message: "Method Not Allowed" }));
+  });
+  await new Promise((resolve, reject) => {
+    server2.listen(port, () => resolve());
+    server2.on("error", (err) => reject(err));
+  });
+  activeListener = {
+    server: server2,
+    port,
+    apiKey,
+    logs
+  };
+  return {
+    success: true,
+    running: true,
+    port,
+    apiKeyConfigured: Boolean(apiKey),
+    endpoint: `http://localhost:${port}/api/zalo-webhook`,
+    message: `Webhook listener server started on port ${port}.`,
+    tunnelTip: `Run "ngrok http ${port}" or "cloudflared tunnel --url http://localhost:${port}" to get a public HTTPS URL for Zalo Developer Portal.`
+  };
+}
+function getWebhookIntegrationGuide() {
+  return {
+    title: "Zalo Mini App Webhook Integration Guide",
+    portalUrl: "https://mini.zalo.me/developers",
+    steps: [
+      "1. Truy c\u1EADp https://mini.zalo.me/developers -> Ch\u1ECDn \u1EE9ng d\u1EE5ng Mini App c\u1EE7a b\u1EA1n.",
+      '2. V\xE0o m\u1EE5c "Open APIS" \u1EDF menu b\xEAn tr\xE1i -> ch\u1ECDn "Qu\u1EA3n l\xFD APIs".',
+      '3. T\xECm tr\u01B0\u1EDDng "Webhook URL" v\xE0 \u0111i\u1EC1n URL m\xE1y ch\u1EE7 webhook (b\u1EAFt bu\u1ED9c giao th\u1EE9c HTTPS).',
+      "4. C\u1EA5u h\xECnh IP Whitelist: Khai b\xE1o \u0111\u1ECBa ch\u1EC9 IP c\xF4ng khai c\u1EE7a m\xE1y ch\u1EE7 backend \u0111\u1EC3 Zalo cho ph\xE9p g\u1EEDi webhook.",
+      '5. L\u1EA5y "API Key" (d\xE0nh cho \u0111\u1ED1i t\xE1c gi\u1EA3i ph\xE1p ho\u1EB7c nh\xE0 ph\xE1t tri\u1EC3n) \u0111\u1EC3 ti\u1EBFn h\xE0nh x\xE1c th\u1EF1c ch\u1EEF k\xFD (Signature).'
+    ],
+    signatureVerificationRule: {
+      header: "x-zevent-signature",
+      algorithm: "sha256(content + apiKey)",
+      contentRule: "S\u1EAFp x\u1EBFp t\u1EA5t c\u1EA3 c\xE1c field keys trong payload JSON theo b\u1EA3ng ch\u1EEF c\xE1i (A-Z), gh\xE9p c\xE1c gi\xE1 tr\u1ECB l\u1EA1i th\xE0nh chu\u1ED7i, sau \u0111\xF3 n\u1ED1i th\xEAm apiKey v\xE0 hash sha256."
+    },
+    commonEvents: [
+      {
+        name: "user.revoke.consent",
+        description: "Ng\u01B0\u1EDDi d\xF9ng r\xFAt l\u1EA1i quy\u1EC1n \u0111\u1ED3ng \xFD ho\u1EB7c y\xEAu c\u1EA7u x\xF3a d\u1EEF li\u1EC7u c\xE1 nh\xE2n theo Ngh\u1ECB \u0111\u1ECBnh 13/2023/N\u0110-CP. M\xE1y ch\u1EE7 c\u1EA7n x\xF3a ho\u1EB7c \u1EA9n th\xF4ng tin t\u01B0\u01A1ng \u1EE9ng.",
+        samplePayload: {
+          appId: "2522725584854781271",
+          event: "user.revoke.consent",
+          timestamp: 17274384e5,
+          userId: "zalo_user_id_here"
+        }
+      },
+      {
+        name: "version_review_status",
+        description: "Th\xF4ng b\xE1o k\u1EBFt qu\u1EA3 x\xE9t duy\u1EC7t phi\xEAn b\u1EA3n Mini App (\u0110\xE3 duy\u1EC7t ho\u1EB7c B\u1ECB t\u1EEB ch\u1ED1i).",
+        samplePayload: {
+          appId: "2522725584854781271",
+          event: "app_version_status",
+          version: "5",
+          status: "APPROVED",
+          timestamp: 17274384e5
+        }
+      },
+      {
+        name: "payment_status",
+        description: "Th\xF4ng b\xE1o tr\u1EA1ng th\xE1i thanh to\xE1n \u0111\u01A1n h\xE0ng t\u1EEB Zalo Checkout SDK.",
+        samplePayload: {
+          appId: "2522725584854781271",
+          event: "payment_callback",
+          orderId: "ORDER_123456",
+          transId: "ZALO_TRANS_789",
+          amount: 5e4,
+          status: "SUCCESS",
+          timestamp: 17274384e5
+        }
+      }
+    ],
+    responseRequirements: {
+      status: 200,
+      format: { error: 0, message: "Success" },
+      timeout: "Ph\u1EA3i ph\u1EA3n h\u1ED3i trong v\xF2ng 2 gi\xE2y. N\u1EBFu th\u1EA5t b\u1EA1i, Zalo s\u1EBD retry sau 30s, 5m, 15m, 30m, 1h."
+    }
+  };
+}
+
 // src/index.ts
 var server = new McpServer({
   name: "zmp-mcp",
@@ -1225,6 +1552,59 @@ server.tool(
       explicitToken,
       devMode
     });
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_verify_webhook",
+  "Verify or generate Zalo Webhook signatures (supports Zalo Mini App Open API sha256 sorted fields and Zalo OA Webhooks).",
+  {
+    payload: z.record(z.any()).describe("The JSON payload object received in the webhook request."),
+    apiKey: z.string().optional().describe("Zalo Mini App Open API Key (or Partner API Key)."),
+    oaSecretKey: z.string().optional().describe("Zalo Official Account (OA) Secret Key (if verifying OA webhook)."),
+    appId: z.string().optional().describe("Zalo App ID."),
+    timestamp: z.union([z.number(), z.string()]).optional().describe("Optional event timestamp."),
+    receivedSignature: z.string().optional().describe("Signature received in the x-zevent-signature header. If omitted, generates test signature."),
+    type: z.enum(["miniapp", "oa"]).optional().describe('Webhook type: "miniapp" (default) or "oa".')
+  },
+  async ({ payload, apiKey, oaSecretKey, appId, timestamp, receivedSignature, type }) => {
+    const res = await verifyWebhookTool({
+      payload,
+      apiKey,
+      oaSecretKey,
+      appId,
+      timestamp,
+      receivedSignature,
+      type
+    });
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_manage_webhook_listener",
+  "Start, stop, check status, or clear logs of a local Zalo Webhook receiver server for local testing and debugging.",
+  {
+    action: z.enum(["start", "stop", "status", "clear_logs"]).describe("Action to perform on the listener."),
+    port: z.number().optional().describe("Local port to listen on (default: 8086)."),
+    apiKey: z.string().optional().describe("Optional API Key to auto-verify incoming x-zevent-signature.")
+  },
+  async ({ action, port, apiKey }) => {
+    const res = await manageWebhookListener({ action, port, apiKey });
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_get_webhook_docs",
+  "Get comprehensive technical documentation, event schemas (Decree 13 user deletion, version review, payment), and integration guide for Zalo Mini App Webhook.",
+  {},
+  async () => {
+    const res = getWebhookIntegrationGuide();
     return {
       content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
     };

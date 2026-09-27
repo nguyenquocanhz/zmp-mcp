@@ -13,6 +13,11 @@ import { getAppInfo, createAppProject } from './tools/project.js';
 import { buildProject, syncConfig } from './tools/build.js';
 import { validateProject } from './tools/validate.js';
 import { deployApp } from './tools/deploy.js';
+import {
+  verifyWebhookTool,
+  manageWebhookListener,
+  getWebhookIntegrationGuide,
+} from './tools/webhook.js';
 
 // Initialize MCP Server
 const server = new McpServer({
@@ -215,6 +220,68 @@ server.tool(
       explicitToken,
       devMode,
     });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 10. zmp_verify_webhook
+server.tool(
+  'zmp_verify_webhook',
+  'Verify or generate Zalo Webhook signatures (supports Zalo Mini App Open API sha256 sorted fields and Zalo OA Webhooks).',
+  {
+    payload: z.record(z.any()).describe('The JSON payload object received in the webhook request.'),
+    apiKey: z.string().optional().describe('Zalo Mini App Open API Key (or Partner API Key).'),
+    oaSecretKey: z.string().optional().describe('Zalo Official Account (OA) Secret Key (if verifying OA webhook).'),
+    appId: z.string().optional().describe('Zalo App ID.'),
+    timestamp: z.union([z.number(), z.string()]).optional().describe('Optional event timestamp.'),
+    receivedSignature: z
+      .string()
+      .optional()
+      .describe('Signature received in the x-zevent-signature header. If omitted, generates test signature.'),
+    type: z.enum(['miniapp', 'oa']).optional().describe('Webhook type: "miniapp" (default) or "oa".'),
+  },
+  async ({ payload, apiKey, oaSecretKey, appId, timestamp, receivedSignature, type }) => {
+    const res = await verifyWebhookTool({
+      payload,
+      apiKey,
+      oaSecretKey,
+      appId,
+      timestamp,
+      receivedSignature,
+      type,
+    });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 11. zmp_manage_webhook_listener
+server.tool(
+  'zmp_manage_webhook_listener',
+  'Start, stop, check status, or clear logs of a local Zalo Webhook receiver server for local testing and debugging.',
+  {
+    action: z.enum(['start', 'stop', 'status', 'clear_logs']).describe('Action to perform on the listener.'),
+    port: z.number().optional().describe('Local port to listen on (default: 8086).'),
+    apiKey: z.string().optional().describe('Optional API Key to auto-verify incoming x-zevent-signature.'),
+  },
+  async ({ action, port, apiKey }) => {
+    const res = await manageWebhookListener({ action, port, apiKey });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 12. zmp_get_webhook_docs
+server.tool(
+  'zmp_get_webhook_docs',
+  'Get comprehensive technical documentation, event schemas (Decree 13 user deletion, version review, payment), and integration guide for Zalo Mini App Webhook.',
+  {},
+  async () => {
+    const res = getWebhookIntegrationGuide();
     return {
       content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
     };
