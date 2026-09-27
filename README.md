@@ -54,9 +54,16 @@ npm run build
 
 ### 2. Configuration for AI Clients
 
-#### Claude Desktop
+#### Claude Code CLI & Claude Desktop
 
-Add to your `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Run via CLI command:
+```bash
+/mcp add zmp-mcp node "D:/zmp-mcp/dist/index.js"
+# or
+claude mcp add zmp-mcp node "D:/zmp-mcp/dist/index.js"
+```
+
+Or add to your `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_config.json` on Windows or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -69,9 +76,24 @@ Add to your `claude_desktop_config.json` (`%APPDATA%\Claude\claude_desktop_confi
 }
 ```
 
+#### OpenAI Codex CLI & Desktop
+
+Run via Codex CLI:
+```bash
+codex mcp add zmp-mcp -- node "D:/zmp-mcp/dist/index.js"
+```
+
+Or add directly to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers."zmp-mcp"]
+command = "node"
+args = [ "D:/zmp-mcp/dist/index.js" ]
+```
+
 #### Antigravity / Gemini CLI
 
-Add to your `mcp_config.json`:
+Add to your `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
