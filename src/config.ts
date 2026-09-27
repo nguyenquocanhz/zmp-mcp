@@ -1,0 +1,47 @@
+export const ZALO_CONFIG = {
+  API_DOMAIN: {
+    prod: 'https://zmp-api.developers.zalo.me/',
+    dev: 'https://dev-zmp-api.developers.zalo.me/',
+  },
+  ZDN_URL: {
+    prod: 'https://h5.zdn.vn/zapps/',
+    dev: 'https://dev.h5.zalo.me/zapps/',
+  },
+  ENDPOINTS: {
+    requestLogin: 'admin/request-login',
+    checkLoginStatus: 'admin/get-login-status',
+    requestUpload: 'app/request-upload',
+    uploadChunk: 'app/upload-chunk',
+    getAppInfo: 'app/get-info',
+  },
+  LIMITS: {
+    maxZipSizeMB: 10,
+    maxFileSizeMB: 3,
+    quotas: {
+      development: 300,
+      testing: 60,
+    },
+    allowedExtensions: [
+      '.css',
+      '.js',
+      '.json',
+      '.ttf',
+      '.woff',
+      '.svg',
+      '.swf',
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.woff2',
+      '.eot',
+      '.otf',
+      '.plist',
+      '.mp3',
+      '.wav',
+      '.gif',
+      '.cconb',
+      '.wasm',
+      '.webp',
+    ],
+  },
+};

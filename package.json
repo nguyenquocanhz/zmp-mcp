@@ -1,0 +1,51 @@
+{
+  "name": "zmp-mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) Server for Zalo Mini App Development, Validation & Cloud Deployment",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "zmp-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "zalo",
+    "zalo-mini-app",
+    "zmp",
+    "zmp-cli",
+    "zaui",
+    "ai-assistant"
+  ],
+  "author": "Nguyen Quoc Anh <nguyenquocanhz>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nguyenquocanhz/zmp-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nguyenquocanhz/zmp-mcp/issues"
+  },
+  "homepage": "https://github.com/nguyenquocanhz/zmp-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "archiver": "^7.0.1",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "qrcode": "^1.5.4",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/node": "^22.13.5",
+    "@types/qrcode": "^1.5.5",
+    "tsup": "^8.3.6",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
