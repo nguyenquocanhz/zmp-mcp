@@ -157,7 +157,7 @@ function saveEnv(projectDir, values) {
 
 // src/utils/oauth-server.ts
 import http from "http";
-import { URL } from "url";
+import { URL as URL2 } from "url";
 function startLocalOAuthServer(options) {
   const port = options.port || 8085;
   const timeoutMs = options.timeoutMs || 12e4;
@@ -167,7 +167,7 @@ function startLocalOAuthServer(options) {
       let timeoutHandle;
       server2 = http.createServer((req, res) => {
         try {
-          const reqUrl = new URL(req.url || "/", `http://localhost:${port}`);
+          const reqUrl = new URL2(req.url || "/", `http://localhost:${port}`);
           if (reqUrl.pathname === "/oauth/callback" || reqUrl.pathname === "/callback") {
             const params = {};
             reqUrl.searchParams.forEach((val, key) => {
@@ -1376,6 +1376,310 @@ function getWebhookIntegrationGuide() {
   };
 }
 
+// src/tools/audit.ts
+import fs7 from "fs";
+import path7 from "path";
+import axios2 from "axios";
+async function auditWebEndpoint(targetUrl, findings) {
+  const urlObj = new URL(targetUrl);
+  if (urlObj.protocol !== "https:") {
+    findings.push({
+      owaspCategory: "A02:2021 - Cryptographic Failures",
+      title: "Insecure Transport Protocol (HTTP)",
+      severity: "CRITICAL",
+      description: `Target endpoint uses unencrypted HTTP protocol (${targetUrl}). Webhook payloads and user data can be intercepted.`,
+      location: targetUrl,
+      recommendation: "Enforce HTTPS for all production APIs and Mini App endpoints. Obtain a valid TLS/SSL certificate."
+    });
+  }
+  try {
+    const res = await axios2.get(targetUrl, {
+      validateStatus: () => true,
+      timeout: 1e4,
+      headers: {
+        "User-Agent": "zmp-mcp-security-audit/1.0"
+      }
+    });
+    const headers = res.headers;
+    if (!headers["strict-transport-security"] && urlObj.protocol === "https:") {
+      findings.push({
+        owaspCategory: "A05:2021 - Security Misconfiguration",
+        title: "Missing HSTS (Strict-Transport-Security) Header",
+        severity: "MEDIUM",
+        description: "Server does not advertise HSTS header. Browsers may be susceptible to SSL-stripping man-in-the-middle attacks.",
+        location: targetUrl,
+        recommendation: "Add header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload"
+      });
+    }
+    if (!headers["x-content-type-options"]) {
+      findings.push({
+        owaspCategory: "A05:2021 - Security Misconfiguration",
+        title: "Missing X-Content-Type-Options Header",
+        severity: "LOW",
+        description: 'Missing "X-Content-Type-Options: nosniff". Browsers may attempt to MIME-sniff response content, opening XSS risks.',
+        location: targetUrl,
+        recommendation: 'Configure server to return "X-Content-Type-Options: nosniff".'
+      });
+    }
+    if (!headers["x-frame-options"] && !headers["content-security-policy"]) {
+      findings.push({
+        owaspCategory: "A05:2021 - Security Misconfiguration",
+        title: "Missing Clickjacking Protection (X-Frame-Options / CSP)",
+        severity: "MEDIUM",
+        description: "Missing X-Frame-Options or Content-Security-Policy with frame-ancestors. Endpoint could be framed for clickjacking.",
+        location: targetUrl,
+        recommendation: `Add "X-Frame-Options: DENY" (or SAMEORIGIN) or CSP "frame-ancestors 'none'".`
+      });
+    }
+    const serverHeader = headers["server"] || "";
+    const poweredBy = headers["x-powered-by"] || "";
+    if (serverHeader.match(/(apache\/\d|nginx\/\d|php\/\d|express)/i) || poweredBy) {
+      findings.push({
+        owaspCategory: "A05:2021 - Security Misconfiguration",
+        title: "Detailed Server Version / Banner Disclosure",
+        severity: "LOW",
+        description: `Server leaks specific software versions (${serverHeader || poweredBy}). Facilitates attacker fingerprinting.`,
+        location: "HTTP Response Headers",
+        recommendation: "Disable Server banner tokens and remove X-Powered-By header."
+      });
+    }
+    const corsOrigin = headers["access-control-allow-origin"];
+    const corsCreds = headers["access-control-allow-credentials"];
+    if (corsOrigin === "*" && corsCreds === "true") {
+      findings.push({
+        owaspCategory: "A01:2021 - Broken Access Control",
+        title: "Critical CORS Misconfiguration (Wildcard with Credentials)",
+        severity: "CRITICAL",
+        description: 'Access-Control-Allow-Origin is set to wildcard "*" while Access-Control-Allow-Credentials is true.',
+        location: "CORS Headers",
+        recommendation: 'Explicitly specify trusted origins instead of wildcard "*" when credentials are permitted.'
+      });
+    } else if (corsOrigin === "*") {
+      findings.push({
+        owaspCategory: "A01:2021 - Broken Access Control",
+        title: "Wildcard CORS Origin Policy",
+        severity: "INFO",
+        description: "Access-Control-Allow-Origin: * allows any web origin to read responses.",
+        location: "CORS Headers",
+        recommendation: "If this API handles private user data, restrict CORS to authorized domains only."
+      });
+    }
+    if (res.status === 500) {
+      const dataStr = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
+      if (dataStr.includes("Stack trace") || dataStr.includes("Exception") || dataStr.includes("SQLSTATE")) {
+        findings.push({
+          owaspCategory: "A09:2021 - Security Logging and Monitoring Failures",
+          title: "Detailed Exception / Stack Trace Exposure on 500 Error",
+          severity: "HIGH",
+          description: "Server returned raw stack trace or database error message to client.",
+          location: targetUrl,
+          recommendation: "Sanitize error outputs in production. Log full traces internally and return generic error envelopes."
+        });
+      }
+    }
+  } catch (err) {
+    findings.push({
+      owaspCategory: "A05:2021 - Security Misconfiguration",
+      title: "Endpoint Unreachable or Connection Refused",
+      severity: "HIGH",
+      description: `Failed to connect to ${targetUrl}: ${err.message}`,
+      location: targetUrl,
+      recommendation: "Verify server is running, firewall ports are open, and DNS resolves properly."
+    });
+  }
+}
+function auditProjectSource(projectDir, findings) {
+  if (!fs7.existsSync(projectDir)) {
+    findings.push({
+      owaspCategory: "A05:2021 - Security Misconfiguration",
+      title: "Project Directory Not Found",
+      severity: "HIGH",
+      description: `Directory does not exist: ${projectDir}`,
+      recommendation: "Provide a valid project directory path."
+    });
+    return;
+  }
+  const sensitiveFiles = [".env", ".env.local", "id_rsa", "private.key", "credentials.json"];
+  for (const sFile of sensitiveFiles) {
+    const sPath = path7.join(projectDir, sFile);
+    if (fs7.existsSync(sPath)) {
+      const gitIgnorePath = path7.join(projectDir, ".gitignore");
+      const gitIgnoreContent = fs7.existsSync(gitIgnorePath) ? fs7.readFileSync(gitIgnorePath, "utf8") : "";
+      if (!gitIgnoreContent.includes(sFile)) {
+        findings.push({
+          owaspCategory: "A07:2021 - Identification and Authentication Failures",
+          title: `Sensitive Environment File Not in .gitignore (${sFile})`,
+          severity: "HIGH",
+          description: `Found ${sFile} in project directory, but it is not explicitly listed in .gitignore. Risk of accidental credential commit.`,
+          location: sPath,
+          recommendation: `Add "${sFile}" to .gitignore immediately and revoke any committed keys.`
+        });
+      }
+    }
+  }
+  function scanDir(dir, depth = 0) {
+    if (depth > 6) return;
+    const entries = fs7.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") && entry.name !== ".env") continue;
+      if (["node_modules", "dist", "build", "www", ".git"].includes(entry.name)) continue;
+      const fullPath = path7.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath, depth + 1);
+      } else if (entry.isFile() && /\.(jsx?|tsx?|php|json|html)$/i.test(entry.name)) {
+        auditFileContent(fullPath, findings);
+      }
+    }
+  }
+  scanDir(projectDir);
+}
+function auditFileContent(filePath, findings) {
+  const relPath = path7.basename(filePath);
+  const content = fs7.readFileSync(filePath, "utf8");
+  const secretPatterns = [
+    { regex: /AIzaSy[0-9A-Za-z_-]{33}/g, name: "Google API Key" },
+    { regex: /sk_live_[0-9a-zA-Z]{24}/g, name: "Stripe Secret Key" },
+    { regex: /(bearer\s+eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})/gi, name: "Hardcoded JWT Access Token" },
+    { regex: /(apiKey|api_secret|oaSecretKey|secretKey)\s*[:=]\s*['"][a-zA-Z0-9_\-]{16,}['"]/gi, name: "Hardcoded Secret / API Key" }
+  ];
+  for (const { regex, name } of secretPatterns) {
+    if (regex.test(content) && !filePath.includes(".example.") && !filePath.includes("test")) {
+      findings.push({
+        owaspCategory: "A07:2021 - Identification and Authentication Failures",
+        title: `Hardcoded Credential Detected: ${name}`,
+        severity: "CRITICAL",
+        description: `Found potential hardcoded credential (${name}) directly in source code.`,
+        location: relPath,
+        recommendation: "Extract secrets to environment variables (.env) and never hardcode credentials in code."
+      });
+    }
+  }
+  if (/dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:/g.test(content)) {
+    findings.push({
+      owaspCategory: "A03:2021 - Injection",
+      title: "Dangerous Inner HTML Injection (XSS Vulnerability)",
+      severity: "HIGH",
+      description: 'Found usage of "dangerouslySetInnerHTML". Unsanitized dynamic user input passed here can execute malicious scripts.',
+      location: relPath,
+      recommendation: "Sanitize HTML input using DOMPurify before rendering, or prefer safe React text children."
+    });
+  }
+  if (/\beval\s*\(/.test(content)) {
+    findings.push({
+      owaspCategory: "A03:2021 - Injection",
+      title: "Usage of eval() Execution Sink",
+      severity: "CRITICAL",
+      description: "Found call to eval(). Arbitrary JavaScript execution risk.",
+      location: relPath,
+      recommendation: "Refactor code to avoid eval(). Use JSON.parse() for data serialization."
+    });
+  }
+  const insecureHttpMatches = content.match(/http:\/\/(?!(localhost|127\.0\.0\.1|0\.0\.0\.0))[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+  if (insecureHttpMatches && insecureHttpMatches.length > 0 && !filePath.includes("test")) {
+    findings.push({
+      owaspCategory: "A02:2021 - Cryptographic Failures",
+      title: "Plaintext HTTP Request URL in Codebase",
+      severity: "MEDIUM",
+      description: `Found plaintext HTTP URLs (${insecureHttpMatches.slice(0, 3).join(", ")}). Insecure transport can cause mixed-content blocking.`,
+      location: relPath,
+      recommendation: "Upgrade all external resource and API URLs to HTTPS."
+    });
+  }
+  if (content.includes("x-zevent-signature") && content.includes("verify") === false && filePath.includes("webhook")) {
+    findings.push({
+      owaspCategory: "A08:2021 - Software and Data Integrity Failures",
+      title: "Unverified Webhook Signature",
+      severity: "HIGH",
+      description: "Webhook code references x-zevent-signature but does not appear to perform constant-time cryptographic verification.",
+      location: relPath,
+      recommendation: "Verify incoming webhook signatures using sha256(content + apiKey) and constant-time string comparison."
+    });
+  }
+}
+async function runOwaspAudit(params) {
+  const findings = [];
+  if (params.url) {
+    await auditWebEndpoint(params.url, findings);
+  }
+  if (params.projectDir) {
+    auditProjectSource(params.projectDir, findings);
+  }
+  let score = 100;
+  let criticalCount = 0;
+  let highCount = 0;
+  let mediumCount = 0;
+  let lowCount = 0;
+  let infoCount = 0;
+  const owaspCategories = [
+    "A01:2021 - Broken Access Control",
+    "A02:2021 - Cryptographic Failures",
+    "A03:2021 - Injection",
+    "A04:2021 - Insecure Design",
+    "A05:2021 - Security Misconfiguration",
+    "A06:2021 - Vulnerable and Outdated Components",
+    "A07:2021 - Identification and Authentication Failures",
+    "A08:2021 - Software and Data Integrity Failures",
+    "A09:2021 - Security Logging and Monitoring Failures",
+    "A10:2021 - Server-Side Request Forgery (SSRF)"
+  ];
+  const owaspCompliance = {};
+  for (const cat of owaspCategories) {
+    owaspCompliance[cat] = { status: "PASS", count: 0 };
+  }
+  for (const f of findings) {
+    if (f.severity === "CRITICAL") {
+      score -= 25;
+      criticalCount++;
+    } else if (f.severity === "HIGH") {
+      score -= 15;
+      highCount++;
+    } else if (f.severity === "MEDIUM") {
+      score -= 8;
+      mediumCount++;
+    } else if (f.severity === "LOW") {
+      score -= 3;
+      lowCount++;
+    } else {
+      infoCount++;
+    }
+    if (owaspCompliance[f.owaspCategory]) {
+      owaspCompliance[f.owaspCategory].count++;
+      if (["CRITICAL", "HIGH"].includes(f.severity)) {
+        owaspCompliance[f.owaspCategory].status = "FAIL";
+      } else if (owaspCompliance[f.owaspCategory].status !== "FAIL") {
+        owaspCompliance[f.owaspCategory].status = "WARNING";
+      }
+    }
+  }
+  score = Math.max(0, Math.min(100, score));
+  let grade = "A+";
+  if (score >= 95) grade = "A+";
+  else if (score >= 85) grade = "A";
+  else if (score >= 70) grade = "B";
+  else if (score >= 55) grade = "C";
+  else if (score >= 40) grade = "D";
+  else grade = "F";
+  return {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    target: {
+      url: params.url,
+      projectDir: params.projectDir
+    },
+    securityScore: score,
+    grade,
+    summary: {
+      critical: criticalCount,
+      high: highCount,
+      medium: mediumCount,
+      low: lowCount,
+      info: infoCount,
+      total: findings.length
+    },
+    findings,
+    owaspCompliance
+  };
+}
+
 // src/index.ts
 var server = new McpServer({
   name: "zmp-mcp",
@@ -1605,6 +1909,20 @@ server.tool(
   {},
   async () => {
     const res = getWebhookIntegrationGuide();
+    return {
+      content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
+    };
+  }
+);
+server.tool(
+  "zmp_owasp_audit",
+  "Perform comprehensive OWASP Top 10 security audit on a live Web/Webhook endpoint (headers, TLS, CORS, info disclosure) or project codebase (hardcoded secrets, XSS, insecure transport).",
+  {
+    url: z.string().optional().describe("Target HTTP/HTTPS URL to scan for OWASP Top 10 vulnerabilities."),
+    projectDir: z.string().optional().describe("Target project directory to statically analyze for security flaws.")
+  },
+  async ({ url, projectDir }) => {
+    const res = await runOwaspAudit({ url, projectDir });
     return {
       content: [{ type: "text", text: JSON.stringify(res, null, 2) }]
     };

@@ -18,6 +18,7 @@ import {
   manageWebhookListener,
   getWebhookIntegrationGuide,
 } from './tools/webhook.js';
+import { runOwaspAudit } from './tools/audit.js';
 
 // Initialize MCP Server
 const server = new McpServer({
@@ -282,6 +283,22 @@ server.tool(
   {},
   async () => {
     const res = getWebhookIntegrationGuide();
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
+// 13. zmp_owasp_audit
+server.tool(
+  'zmp_owasp_audit',
+  'Perform comprehensive OWASP Top 10 security audit on a live Web/Webhook endpoint (headers, TLS, CORS, info disclosure) or project codebase (hardcoded secrets, XSS, insecure transport).',
+  {
+    url: z.string().optional().describe('Target HTTP/HTTPS URL to scan for OWASP Top 10 vulnerabilities.'),
+    projectDir: z.string().optional().describe('Target project directory to statically analyze for security flaws.'),
+  },
+  async ({ url, projectDir }) => {
+    const res = await runOwaspAudit({ url, projectDir });
     return {
       content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
     };

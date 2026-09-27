@@ -39,6 +39,7 @@ It bridges AI Coding Assistants (**Antigravity**, **Claude Desktop**, **Cursor**
 | `zmp_verify_webhook` | Verify or generate Zalo Webhook signatures (`x-zevent-signature`, SHA-256 sorted fields, Decree 13 user deletion). |
 | `zmp_manage_webhook_listener` | Start or manage a local webhook listener server with auto-signature checking for tunnels (ngrok/cloudflare). |
 | `zmp_get_webhook_docs` | Get comprehensive technical documentation, event schemas, and integration guide for Zalo Mini App Webhook. |
+| `zmp_owasp_audit` | Perform comprehensive OWASP Top 10 security audit on live Web/Webhook endpoints and local codebases. |
 
 ---
 
