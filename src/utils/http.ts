@@ -1,11 +1,11 @@
 import axios, { AxiosInstance } from 'axios';
-import { ZALO_CONFIG } from '../config.js';
+import { ZALO_CONFIG, SERVER_VERSION } from '../config.js';
 
 export function createZaloApiClient(token?: string, devMode: boolean = false): AxiosInstance {
   const baseURL = devMode ? ZALO_CONFIG.API_DOMAIN.dev : ZALO_CONFIG.API_DOMAIN.prod;
   const headers: Record<string, string> = {
     'cache-control': 'no-cache',
-    'User-Agent': 'zmp-mcp/1.0.0',
+    'User-Agent': `zmp-mcp/${SERVER_VERSION}`,
   };
 
   if (token) {

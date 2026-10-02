@@ -40,6 +40,20 @@ It bridges AI Coding Assistants (**Antigravity**, **Claude Desktop**, **Cursor**
 | `zmp_manage_webhook_listener` | Start or manage a local webhook listener server with auto-signature checking for tunnels (ngrok/cloudflare). |
 | `zmp_get_webhook_docs` | Get comprehensive technical documentation, event schemas, and integration guide for Zalo Mini App Webhook. |
 | `zmp_owasp_audit` | Perform comprehensive OWASP Top 10 security audit on live Web/Webhook endpoints and local codebases. |
+| `zmp_policy_audit` | Audit a project against the Zalo Mini App censorship policy: name rules, external links, permission requests on load, 3rd-party login, ads, cash-out, demo content, eval, HTTP, purchase without Checkout SDK. Returns `file:line` findings plus checks that must be done by hand. |
+
+---
+
+## 🛡️ Policy Audit CLI
+
+The same censorship-policy engine as `zmp_policy_audit` runs from the command line. It exits with code 1 when there is a violation, so CI can block a non-compliant build:
+
+```bash
+npx -y github:nguyenquocanhz/zmp-mcp audit ./my-mini-app        # text report
+npx -y github:nguyenquocanhz/zmp-mcp audit ./my-mini-app --json # JSON report
+```
+
+`npm run build` also emits `dist/zmp-audit.cjs`, a dependency-free copy you can drop into a Mini App project as `zmp-audit.js` to run offline (`node zmp-audit.js`). Edit the rules in `src/policy/engine.ts`, never the copy.
 
 ---
 

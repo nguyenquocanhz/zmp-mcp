@@ -1,3 +1,7 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import QRCode from 'qrcode';
 import { createZaloApiClient } from '../utils/http.js';
 import { loadEnv, saveEnv } from '../utils/env.js';
@@ -40,6 +44,11 @@ export async function getLoginStatus(projectDir: string, explicitToken?: string)
   }
 }
 
+/** Bỏ các trường bí mật (jwt, token...) trước khi trả kết quả về cho AI client */
+function publicSessionInfo(data: Record<string, unknown> = {}) {
+  return Object.fromEntries(Object.entries(data).filter(([k]) => !/jwt|token|secret|refresh|key/i.test(k)));
+}
+
 export async function pollLoginStatus(params: {
   zmpsk: string;
   projectDir?: string;
@@ -60,12 +69,21 @@ export async function pollLoginStatus(params: {
         const token = res.data.data.jwt;
         if (projectDir) {
           saveEnv(projectDir, { token });
+          // Token đã nằm trong .env: không trả về để nó không lọt vào hội thoại hay log của AI client
+          return {
+            success: true,
+            message: 'Zalo mobile scan verified! Access token saved to .env (ZMP_TOKEN).',
+            tokenSaved: true,
+            envPath: path.join(projectDir, '.env'),
+            session: publicSessionInfo(res.data.data),
+          };
         }
         return {
           success: true,
-          message: 'Zalo mobile scan verified! Access token saved to .env.',
+          message: 'Zalo mobile scan verified. No projectDir given, so the token is returned once: store it with zmp_set_token and do not share it.',
+          tokenSaved: false,
           token,
-          data: res.data.data,
+          session: publicSessionInfo(res.data.data),
         };
       }
     } catch {
@@ -106,11 +124,15 @@ export async function requestLoginQr(params: {
 
       const dataUrl = await QRCode.toDataURL(verifyUrl, { margin: 2, scale: 6 });
       const terminalQr = await QRCode.toString(verifyUrl, { type: 'terminal', small: true });
+      // Ảnh QR ra file để client gửi thẳng cho người dùng, khỏi tự giải mã base64
+      const qrImagePath = path.join(os.tmpdir(), `zmp-login-qr-${Date.now()}.png`);
+      await QRCode.toFile(qrImagePath, verifyUrl, { margin: 2, scale: 6 });
 
       const initialResult = {
         success: true,
         zmpsk,
         verifyUrl,
+        qrImagePath,
         terminalQr,
         qrDataUrl: dataUrl,
         instructions:
@@ -153,18 +175,29 @@ export async function startOAuthCallback(params: {
     const serverInstance = await startLocalOAuthServer({ port, timeoutMs });
 
     let authUrl = '';
+    let state = '';
     if (zaloAppId) {
-      const state = Math.random().toString(36).substring(7);
+      state = crypto.randomBytes(16).toString('hex');
       authUrl = `https://oauth.zaloapp.com/v4/permission?app_id=${zaloAppId}&redirect_uri=${encodeURIComponent(serverInstance.callbackUrl)}&state=${state}`;
     }
 
     // Wait for the browser callback in the background
     const callbackData = await serverInstance.waitForCallback();
 
-    if (callbackData.code && projectDir) {
-      // Automatically save authorization code if requested
-      saveEnv(projectDir, { token: callbackData.code });
+    // state phải khớp giá trị đã gửi đi, chặn callback giả mạo (CSRF)
+    if (state && callbackData.state !== state) {
+      return {
+        success: false,
+        authUrl,
+        callbackUrl: serverInstance.callbackUrl,
+        error: 'state_mismatch',
+        message: 'OAuth callback rejected: state does not match the authorization request.',
+      };
     }
+
+    // Không ghi code vào ZMP_TOKEN: code chỉ dùng một lần để đổi lấy token, ghi đè sẽ làm mất token đang dùng.
+    // (projectDir giữ trong chữ ký hàm để tương thích ngược.)
+    void projectDir;
 
     return {
       success: !callbackData.error,
