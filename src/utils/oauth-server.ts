@@ -1,6 +1,11 @@
 import http from 'http';
 import { URL } from 'url';
 
+/** Tham số trên URL callback do bên ngoài kiểm soát: escape trước khi chèn vào HTML */
+function escapeHtml(v: string): string {
+  return v.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
+}
+
 export interface OAuthCallbackResult {
   code?: string;
   state?: string;
@@ -41,6 +46,7 @@ export function startLocalOAuthServer(options: {
             const state = params['state'];
             const error = params['error'];
             const errorDescription = params['error_description'];
+            const ok = !error;
 
             // Return nice HTML page to user
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -50,7 +56,7 @@ export function startLocalOAuthServer(options: {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zalo Mini App - Xác Thực Thành Công</title>
+  <title>${ok ? 'Xác thực thành công' : 'Xác thực thất bại'}</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -107,10 +113,12 @@ export function startLocalOAuthServer(options: {
 </head>
 <body>
   <div class="card">
-    <div class="icon">✓</div>
-    <h1>Xác thực Zalo thành công!</h1>
-    <p>Thông tin xác thực đã được chuyển tự động về AI Assistant (Claude, Codex, Antigravity). Bạn có thể đóng cửa sổ này.</p>
-    <div class="badge">Session ID: ${state || 'OK'}</div>
+    <div class="icon">${ok ? '✓' : '✕'}</div>
+    <h1>${ok ? 'Xác thực Zalo thành công!' : 'Xác thực Zalo thất bại'}</h1>
+    <p>${ok
+      ? 'Thông tin xác thực đã được chuyển tự động về AI Assistant (Claude, Codex, Antigravity). Bạn có thể đóng cửa sổ này.'
+      : escapeHtml(errorDescription || error || 'Lỗi không xác định')}</p>
+    <div class="badge">Session ID: ${escapeHtml(state || 'OK')}</div>
   </div>
 </body>
 </html>

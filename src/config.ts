@@ -1,3 +1,5 @@
+export const SERVER_VERSION = '1.1.0';
+
 export const ZALO_CONFIG = {
   API_DOMAIN: {
     prod: 'https://zmp-api.developers.zalo.me/',

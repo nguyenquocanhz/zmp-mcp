@@ -19,11 +19,14 @@ import {
   getWebhookIntegrationGuide,
 } from './tools/webhook.js';
 import { runOwaspAudit } from './tools/audit.js';
+import { runPolicyAudit } from './policy/engine.js';
+import { runPolicyCli } from './policy/cli.js';
+import { SERVER_VERSION } from './config.js';
 
 // Initialize MCP Server
 const server = new McpServer({
   name: 'zmp-mcp',
-  version: '1.0.0',
+  version: SERVER_VERSION,
 });
 
 // 1. zmp_get_login_status
@@ -305,7 +308,27 @@ server.tool(
   }
 );
 
+// 14. zmp_policy_audit
+server.tool(
+  'zmp_policy_audit',
+  'Audit a Zalo Mini App project against the official Zalo Mini App censorship policy: app name rules (no "Zalo"/"Mini App"/"App", no ALL CAPS, no emoji, owner prefix, consistent across app-config/app.json/index.html), external links (<a href>, window.open, location.href), permission requests on load, 3rd-party login, ads, cash-out, demo/sample content, eval, insecure HTTP, purchase buttons without Checkout SDK. Returns findings with file:line plus the checks that must be done by hand.',
+  {
+    projectDir: z.string().describe('Absolute path to the Zalo Mini App project directory (containing app-config.json and src/).'),
+  },
+  async ({ projectDir }) => {
+    const res = runPolicyAudit(projectDir);
+    return {
+      content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+    };
+  }
+);
+
 async function main() {
+  // CLI: `zmp-mcp audit [thư mục] [--json]` chạy kiểm duyệt chính sách rồi thoát
+  if (process.argv[2] === 'audit') {
+    process.exitCode = runPolicyCli(process.argv.slice(3));
+    return;
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
